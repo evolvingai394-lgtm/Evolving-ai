@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 TOKEN = "8725460175:AAGKc1m4rLo_wajEXAi06GKic4UA0rGqt8k"
-TWELVE_KEY = "dfbecf637ca6480088d2b584eeaa2914''
+TWELVE_KEY = "dfbecf637ca6480088d2b584eeaa2914"
 DB_NAME = "xauusd_ai.db"
 MODEL_FILE = "xauusd_model.pkl"
 REGIME_FILE = "market_regime.pkl"
@@ -3110,7 +3110,7 @@ def main():
 
     # Load or create legacy components
     memory = TradeMemory()
-        if os.path.exists(MEMORY_FILE):
+    if os.path.exists(MEMORY_FILE):
         memory.load(MEMORY_FILE)
 
     regime_detector = AdvancedMarketRegimeDetector()
@@ -3185,5 +3185,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
