@@ -28,7 +28,6 @@ import threading
 
 warnings.filterwarnings('ignore')
 
-# Setup logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -46,17 +45,14 @@ RISK_FILE = "risk_state.pkl"
 CALIBRATION_FILE = "confidence_calibration.pkl"
 MACRO_FILE = "macro_state.pkl"
 
-# ==================== MACRO ECONOMIC DATA FETCHER ====================
 
 class MacroEconomicData:
-    """Fetch and analyze macroeconomic factors driving gold prices"""
     def __init__(self):
         self.data = {}
         self.last_update = None
-        self.cache_duration = 300  # 5 minutes
+        self.cache_duration = 300
         
     def fetch_usd_index(self):
-        """Fetch US Dollar Index (DXY) - inverse correlation with gold"""
         try:
             url = f"https://api.twelvedata.com/time_series"
             params = {
@@ -82,10 +78,8 @@ class MacroEconomicData:
         return {'value': 100, 'change': 0, 'trend': 'neutral', 'strength': 0}
     
     def fetch_treasury_yields(self):
-        """Fetch US Treasury yields - inverse correlation with gold"""
         yields = {}
         try:
-            # 10-year yield (most important for gold)
             url = f"https://api.twelvedata.com/time_series"
             for symbol, name in [("US10Y", "10Y"), ("US2Y", "2Y"), ("US30Y", "30Y")]:
                 try:
@@ -117,7 +111,6 @@ class MacroEconomicData:
         return yields
     
     def fetch_sp500(self):
-        """Fetch S&P 500 for risk sentiment - gold often inverse to stocks in risk-off"""
         try:
             url = f"https://api.twelvedata.com/time_series"
             params = {
@@ -136,14 +129,13 @@ class MacroEconomicData:
                     'value': current,
                     'change': change,
                     'trend': 'bullish' if change > 0 else 'bearish',
-                    'risk_on': change > 0  # Risk-on = stocks up, gold may suffer
+                    'risk_on': change > 0
                 }
         except Exception as e:
             logger.error(f"SP500 fetch error: {e}")
         return {'value': 4000, 'change': 0, 'trend': 'neutral', 'risk_on': True}
     
     def fetch_vix(self):
-        """Fetch VIX volatility index - high VIX = gold demand"""
         try:
             url = f"https://api.twelvedata.com/time_series"
             params = {
@@ -161,29 +153,26 @@ class MacroEconomicData:
                     'value': current,
                     'change': ((current - previous) / previous) * 100,
                     'fear_level': 'high' if current > 25 else ('extreme' if current > 35 else 'normal'),
-                    'gold_support': current > 20  # High VIX supports gold
+                    'gold_support': current > 20
                 }
         except Exception as e:
             logger.error(f"VIX fetch error: {e}")
         return {'value': 20, 'change': 0, 'fear_level': 'normal', 'gold_support': False}
     
     def fetch_real_rates_proxy(self):
-        """Calculate real rates proxy from yields and inflation expectations"""
         try:
             yields = self.fetch_treasury_yields()
             ten_year = yields.get('10Y', {}).get('value', 4.0)
-            # Simplified: assume inflation ~2.5% if no data
             real_rate = ten_year - 2.5
             return {
                 'real_rate': real_rate,
-                'gold_bearish': real_rate > 2.0,  # High real rates bad for gold
-                'gold_bullish': real_rate < 0.5   # Low/negative real rates good for gold
+                'gold_bearish': real_rate > 2.0,
+                'gold_bullish': real_rate < 0.5
             }
         except:
             return {'real_rate': 1.5, 'gold_bearish': False, 'gold_bullish': False}
     
     def fetch_yield_curve(self):
-        """Analyze yield curve for recession signals (bullish for gold)"""
         try:
             yields = self.fetch_treasury_yields()
             ten_year = yields.get('10Y', {}).get('value', 4.0)
@@ -195,14 +184,13 @@ class MacroEconomicData:
             return {
                 'spread': spread,
                 'inverted': inverted,
-                'recession_signal': inverted,  # Inverted curve = recession fear = gold bullish
+                'recession_signal': inverted,
                 'steepening': spread > 1.0
             }
         except:
             return {'spread': 0.5, 'inverted': False, 'recession_signal': False, 'steepening': True}
     
     def calculate_gold_drivers_score(self):
-        """Calculate composite score for gold drivers (-1 to 1, higher = bullish)"""
         try:
             usd = self.fetch_usd_index()
             yields = self.fetch_treasury_yields()
@@ -214,33 +202,27 @@ class MacroEconomicData:
             score = 0.0
             factors = {}
             
-            # USD strength (inverse to gold, -0.8 weight)
             usd_factor = -1 if usd['trend'] == 'bullish' else (1 if usd['trend'] == 'bearish' else 0)
             score += usd_factor * 0.25
             factors['usd'] = usd_factor
             
-            # Treasury yields (inverse to gold, -0.6 weight)
             ten_year_change = yields.get('10Y', {}).get('change', 0)
             yield_factor = -1 if ten_year_change > 0.5 else (1 if ten_year_change < -0.5 else 0)
             score += yield_factor * 0.20
             factors['yields'] = yield_factor
             
-            # Real rates (inverse to gold, -0.7 weight)
             real_factor = 1 if real_rates['gold_bullish'] else (-1 if real_rates['gold_bearish'] else 0)
             score += real_factor * 0.20
             factors['real_rates'] = real_factor
             
-            # Risk sentiment (VIX, +0.5 weight)
             vix_factor = 1 if vix['gold_support'] else 0
             score += vix_factor * 0.15
             factors['vix'] = vix_factor
             
-            # Yield curve inversion (+0.6 weight)
             curve_factor = 1 if yield_curve['recession_signal'] else 0
             score += curve_factor * 0.10
             factors['yield_curve'] = curve_factor
             
-            # Risk-on/off (inverse, stocks up = gold down)
             risk_factor = -1 if sp500['risk_on'] else 1
             score += risk_factor * 0.10
             factors['risk_sentiment'] = risk_factor
@@ -265,7 +247,6 @@ class MacroEconomicData:
             return {'score': 0, 'factors': {}, 'error': str(e)}
     
     def get_signal(self):
-        """Get trading signal from macro factors"""
         if not self.last_update or (datetime.now() - self.last_update).seconds > self.cache_duration:
             self.calculate_gold_drivers_score()
         
@@ -291,10 +272,8 @@ class MacroEconomicData:
             except:
                 pass
 
-# ==================== ADVANCED LIQUIDITY ANALYZER ====================
 
 class AdvancedLiquidityAnalyzer:
-    """Professional-grade liquidity analysis for institutional-grade execution"""
     def __init__(self):
         self.liquidity_history = deque(maxlen=500)
         self.volume_profile = {}
@@ -302,7 +281,6 @@ class AdvancedLiquidityAnalyzer:
         self.liquidity_zones = []
         
     def calculate_volume_delta(self, df: pd.DataFrame) -> pd.Series:
-        """Calculate volume delta (buying vs selling pressure)"""
         if 'volume' not in df.columns:
             return pd.Series([0] * len(df))
         
@@ -312,20 +290,16 @@ class AdvancedLiquidityAnalyzer:
         low = df['low']
         volume = df['volume']
         
-        # Estimate buying/selling volume based on candle position
         range_val = high - low
         range_val = range_val.replace(0, 1e-10)
         
-        # Buying volume estimate
         buy_vol = volume * ((close - low) / range_val)
-        # Selling volume estimate  
         sell_vol = volume * ((high - close) / range_val)
         
         delta = buy_vol - sell_vol
         return delta
     
     def detect_liquidity_voids(self, df: pd.DataFrame) -> List[Dict]:
-        """Detect liquidity voids (gaps) where price may accelerate"""
         if len(df) < 20:
             return []
         
@@ -340,7 +314,6 @@ class AdvancedLiquidityAnalyzer:
             prev_low = lows[i-1]
             curr_high = highs[i]
             
-            # Bearish void (gap down)
             if curr_high < prev_low:
                 void_size = prev_low - curr_high
                 liquidity_voids.append({
@@ -351,7 +324,6 @@ class AdvancedLiquidityAnalyzer:
                     'index': i
                 })
             
-            # Bullish void (gap up)
             if curr_low > prev_high:
                 void_size = curr_low - prev_high
                 liquidity_voids.append({
@@ -365,24 +337,21 @@ class AdvancedLiquidityAnalyzer:
         return liquidity_voids
     
     def calculate_volume_profile(self, df: pd.DataFrame, bins: int = 20) -> Dict:
-        """Calculate volume profile (POC, Value Areas)"""
         if len(df) < 20 or 'volume' not in df.columns:
             return {'poc': df['close'].iloc[-1] if len(df) > 0 else 0, 'value_area_high': 0, 'value_area_low': 0}
         
         price_range = df['high'].max() - df['low'].min()
-        bin_size = price_range / bins
+        bin_size = price_range / bins if price_range > 0 else 1
         
         volume_by_price = defaultdict(float)
         
         for idx, row in df.iterrows():
             typical_price = (row['high'] + row['low'] + row['close']) / 3
-            bin_price = round(typical_price / bin_size) * bin_size
+            bin_price = round(typical_price / bin_size) * bin_size if bin_size > 0 else typical_price
             volume_by_price[bin_price] += row.get('volume', 0)
         
-        # Point of Control (highest volume price)
         poc = max(volume_by_price.items(), key=lambda x: x[1])[0] if volume_by_price else df['close'].iloc[-1]
         
-        # Calculate Value Area (70% of volume)
         total_volume = sum(volume_by_price.values())
         target_volume = total_volume * 0.70
         
@@ -407,19 +376,17 @@ class AdvancedLiquidityAnalyzer:
         }
     
     def detect_stop_clusters(self, df: pd.DataFrame, lookback: int = 20) -> Dict:
-        """Detect likely stop loss clusters above/below key levels"""
         if len(df) < lookback:
             return {'above': [], 'below': []}
         
         recent_highs = df['high'].tail(lookback).values
         recent_lows = df['low'].tail(lookback).values
         
-        # Round levels where stops likely cluster
         stop_levels_above = []
         stop_levels_below = []
         
         for high in recent_highs:
-            rounded = round(high, 1)  # Round to 1 decimal for gold
+            rounded = round(high, 1)
             if rounded > df['close'].iloc[-1]:
                 stop_levels_above.append(rounded)
         
@@ -428,7 +395,6 @@ class AdvancedLiquidityAnalyzer:
             if rounded < df['close'].iloc[-1]:
                 stop_levels_below.append(rounded)
         
-        # Get most common levels (where many stops cluster)
         from collections import Counter
         common_above = Counter(stop_levels_above).most_common(3)
         common_below = Counter(stop_levels_below).most_common(3)
@@ -441,20 +407,16 @@ class AdvancedLiquidityAnalyzer:
         }
     
     def calculate_liquidity_score(self, df: pd.DataFrame) -> Dict:
-        """Calculate comprehensive liquidity score"""
         if len(df) < 20:
             return {'score': 0.5, 'quality': 'unknown'}
         
-        # Volume analysis
         avg_volume = df['volume'].mean() if 'volume' in df.columns else 1000
         volume_trend = df['volume'].iloc[-5:].mean() / avg_volume if avg_volume > 0 else 1
         
-        # Spread analysis
         spreads = (df['high'] - df['low']) / df['close']
         avg_spread = spreads.mean()
-        spread_tightness = 1 / (1 + avg_spread * 100)  # Lower spread = higher score
+        spread_tightness = 1 / (1 + avg_spread * 100)
         
-        # Depth proxy (using price movement per volume)
         if 'volume' in df.columns and avg_volume > 0:
             price_volatility = df['close'].pct_change().std()
             volume_efficiency = price_volatility / (avg_volume / 1000)
@@ -462,7 +424,6 @@ class AdvancedLiquidityAnalyzer:
         else:
             depth_score = 0.5
         
-        # Composite score
         liquidity_score = (volume_trend * 0.3 + spread_tightness * 0.4 + depth_score * 0.3)
         liquidity_score = np.clip(liquidity_score, 0, 1)
         
@@ -477,7 +438,6 @@ class AdvancedLiquidityAnalyzer:
         }
     
     def get_optimal_entry_zones(self, df: pd.DataFrame, direction: str) -> Dict:
-        """Calculate optimal entry zones based on liquidity analysis"""
         vol_profile = self.calculate_volume_profile(df)
         stops = self.detect_stop_clusters(df)
         liquidity = self.calculate_liquidity_score(df)
@@ -493,52 +453,42 @@ class AdvancedLiquidityAnalyzer:
         }
         
         if direction == "BUY":
-            # Look for liquidity below price
             if stops['below']:
                 nearest_stop = max([s for s in stops['below'] if s < current_price], default=current_price - atr)
-                zones['optimal_entry'] = nearest_stop + (atr * 0.2)  # Enter just above stop cluster
+                zones['optimal_entry'] = nearest_stop + (atr * 0.2)
                 zones['stop_cluster_below'] = nearest_stop
                 zones['stop_risk'] = 'high' if stops['sweep_risk_below'] else 'low'
             
-            # Value area low as support
             if current_price > vol_profile['value_area_low']:
                 zones['value_area_support'] = vol_profile['value_area_low']
                 
-        else:  # SELL
-            # Look for liquidity above price
+        else:
             if stops['above']:
                 nearest_stop = min([s for s in stops['above'] if s > current_price], default=current_price + atr)
-                zones['optimal_entry'] = nearest_stop - (atr * 0.2)  # Enter just below stop cluster
+                zones['optimal_entry'] = nearest_stop - (atr * 0.2)
                 zones['stop_cluster_above'] = nearest_stop
                 zones['stop_risk'] = 'high' if stops['sweep_risk_above'] else 'low'
             
-            # Value area high as resistance
             if current_price < vol_profile['value_area_high']:
                 zones['value_area_resistance'] = vol_profile['value_area_high']
         
         return zones
 
-# ==================== DATA QUALITY FILTER ====================
 
 class DataQualityFilter:
-    """Filter out bad/low-liquidity/abnormal data"""
     def __init__(self):
         self.quality_stats = deque(maxlen=1000)
         
     def validate_candle(self, row: pd.Series, atr: float) -> Tuple[bool, str]:
-        """Check if candle is valid and not anomalous"""
         high, low, open_p, close = row['high'], row['low'], row['open'], row['close']
         volume = row.get('volume', 1000)
         
-        # Check for zero or negative prices
         if any(x <= 0 for x in [high, low, open_p, close]):
             return False, "zero_price"
             
-        # Check for inverted high/low
         if high < low:
             return False, "inverted_range"
             
-        # Check for excessive wicks (possible stop hunt)
         body = abs(close - open_p)
         wick_top = high - max(open_p, close)
         wick_bottom = min(open_p, close) - low
@@ -547,18 +497,15 @@ class DataQualityFilter:
         if range_val == 0:
             return False, "no_range"
             
-        # Doji with massive range (manipulation candle)
         if body / (range_val + 1e-10) < 0.1 and range_val > 3 * atr:
             return False, "manipulation_doji"
             
-        # Abnormal volume spike without price movement (low liquidity)
         if volume > 5000 and body / (range_val + 1e-10) < 0.2:
             return False, "low_liquidity_spike"
             
         return True, "valid"
         
     def filter_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clean entire dataframe"""
         if len(df) < 10:
             return df
             
@@ -583,7 +530,6 @@ class DataQualityFilter:
             
         return clean_df
 
-# ==================== ENHANCED TECHNICAL INDICATORS ====================
 
 def calculate_rsi(prices, period=14):
     delta = prices.diff()
@@ -613,7 +559,6 @@ def calculate_macd(close, fast=12, slow=26, signal=9):
     return macd, macd_signal, macd_hist
 
 def calculate_vwap(df: pd.DataFrame, anchor='session') -> pd.Series:
-    """Calculate VWAP with session anchoring"""
     if anchor == 'session':
         df = df.copy()
         df['hour'] = pd.to_datetime(df.index if 'datetime' not in df.columns else df['datetime']).dt.hour
@@ -635,7 +580,6 @@ def calculate_vwap(df: pd.DataFrame, anchor='session') -> pd.Series:
         return cumulative_tp_vol / (cumulative_vol + 1e-10)
 
 def calculate_vwap_bands(df: pd.DataFrame, std_mult=1.0) -> Tuple[pd.Series, pd.Series, pd.Series]:
-    """VWAP with standard deviation bands"""
     vwap = calculate_vwap(df)
     typical_price = (df['high'] + df['low'] + df['close']) / 3
     variance = ((typical_price - vwap) ** 2).rolling(20).mean()
@@ -704,7 +648,6 @@ def calculate_bollinger_bands(prices, period=20, std_dev=2):
     return upper, sma, lower
 
 def calculate_money_flow_index(df, period=14):
-    """Money Flow Index (similar to RSI but with volume)"""
     typical_price = (df['high'] + df['low'] + df['close']) / 3
     money_flow = typical_price * df['volume']
     
@@ -718,7 +661,6 @@ def calculate_money_flow_index(df, period=14):
     return mfi
 
 def calculate_stochastic(df, k_period=14, d_period=3):
-    """Stochastic Oscillator"""
     low_min = df['low'].rolling(window=k_period).min()
     high_max = df['high'].rolling(window=k_period).max()
     
@@ -728,36 +670,20 @@ def calculate_stochastic(df, k_period=14, d_period=3):
     return k, d
 
 def calculate_williams_r(df, period=14):
-    """Williams %R"""
     high_max = df['high'].rolling(window=period).max()
     low_min = df['low'].rolling(window=period).min()
     
     williams_r = -100 * ((high_max - df['close']) / (high_max - low_min + 1e-10))
     return williams_r
 
-def calculate_obv(df):
-    """On-Balance Volume"""
-    obv = [0]
-    for i in range(1, len(df)):
-        if df['close'].iloc[i] > df['close'].iloc[i-1]:
-            obv.append(obv[-1] + df['volume'].iloc[i])
-        elif df['close'].iloc[i] < df['close'].iloc[i-1]:
-            obv.append(obv[-1] - df['volume'].iloc[i])
-        else:
-            obv.append(obv[-1])
-    return pd.Series(obv, index=df.index)
-
 def calculate_cmf(df, period=20):
-    """Chaikin Money Flow"""
     mfm = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low'] + 1e-10)
     mfv = mfm * df['volume']
     cmf = mfv.rolling(window=period).sum() / df['volume'].rolling(window=period).sum()
     return cmf
 
-# ==================== LATENT PATTERN DISCOVERY ====================
 
 class LatentPatternDiscovery:
-    """Autoencoder-based feature extraction for hidden patterns"""
     def __init__(self, input_dim=20, latent_dim=8):
         self.input_dim = input_dim
         self.latent_dim = latent_dim
@@ -767,7 +693,6 @@ class LatentPatternDiscovery:
         self.is_fitted = False
         
     def fit_transform(self, features: np.ndarray) -> np.ndarray:
-        """Extract latent features"""
         if len(features.shape) == 1:
             features = features.reshape(1, -1)
             
@@ -777,10 +702,8 @@ class LatentPatternDiscovery:
             
         normalized = self.scaler.transform(features)
         
-        # Simple linear autoencoder encoding
         latent = np.tanh(normalized @ self.encoder_weights)
         
-        # Update weights with online learning (reconstruction error)
         if len(features) > 1:
             reconstructed = latent @ self.decoder_weights
             error = normalized - reconstructed
@@ -790,14 +713,12 @@ class LatentPatternDiscovery:
         return latent
     
     def get_novelty_score(self, features: np.ndarray) -> float:
-        """Detect how novel/unusual a pattern is (higher = more unusual)"""
         latent = self.fit_transform(features)
         reconstructed = np.tanh(latent @ self.decoder_weights)
         normalized = self.scaler.transform(features.reshape(1, -1) if len(features.shape) == 1 else features)
         mse = np.mean((normalized - reconstructed) ** 2, axis=1)
         return float(mse[0]) if len(mse) > 0 else 0.0
 
-# ==================== ADVANCED MARKET REGIME DETECTOR ====================
 
 class AdvancedMarketRegimeDetector:
     def __init__(self):
@@ -828,21 +749,18 @@ class AdvancedMarketRegimeDetector:
         self.adx_value = adx if not pd.isna(adx) else 0
         self.trend_strength = self.adx_value
         
-        # Check for manipulation
         is_manip, manip_type = self.manipulation_detector.detect(df)
         if is_manip:
             self.regime = 'manipulation'
             self.sub_regime = manip_type
             return self.regime
             
-        # Check for expansion
         vol_change = volatility / (returns.rolling(50).std().iloc[-1] * np.sqrt(252) + 1e-10)
         if vol_change > 2.0 and adx > 30:
             self.regime = 'expansion'
             self.sub_regime = 'volatility_breakout'
             return self.regime
             
-        # Check liquidity
         liquidity_score = self.liquidity_analyzer.score(df)
         if liquidity_score < 0.3:
             self.regime = 'low_liquidity'
@@ -875,8 +793,18 @@ class AdvancedMarketRegimeDetector:
         elif trending_ratio < 0.3:
             self.adaptive_thresholds['trending'] = min(0.35, self.adaptive_thresholds['trending'] + 0.01)
 
+    def save(self, filepath):
+        joblib.dump({
+            'regime': self.regime,
+            'sub_regime': self.sub_regime,
+            'adx_value': self.adx_value,
+            'trend_strength': self.trend_strength,
+            'regime_history': list(self.regime_history),
+            'adaptive_thresholds': self.adaptive_thresholds
+        }, filepath)
+
+
 class ManipulationDetector:
-    """Detect stop hunts and manipulation"""
     def detect(self, df: pd.DataFrame) -> Tuple[bool, str]:
         if len(df) < 5:
             return False, ""
@@ -884,24 +812,21 @@ class ManipulationDetector:
         last_candle = df.iloc[-1]
         prev_candles = df.iloc[-5:-1]
         
-        # Stop hunt pattern: Wick beyond recent high/low, close back in range
         recent_high = prev_candles['high'].max()
         recent_low = prev_candles['low'].min()
         
-        # Bullish stop hunt (sweep lows)
         if last_candle['low'] < recent_low and last_candle['close'] > recent_low:
             if (recent_low - last_candle['low']) > (last_candle['high'] - last_candle['low']) * 0.6:
                 return True, "bullish_stop_hunt"
                 
-        # Bearish stop hunt (sweep highs)
         if last_candle['high'] > recent_high and last_candle['close'] < recent_high:
             if (last_candle['high'] - recent_high) > (last_candle['high'] - last_candle['low']) * 0.6:
                 return True, "bearish_stop_hunt"
                 
         return False, ""
 
+
 class LiquidityAnalyzer:
-    """Analyze market liquidity conditions"""
     def score(self, df: pd.DataFrame) -> float:
         if len(df) < 20:
             return 1.0
@@ -909,23 +834,19 @@ class LiquidityAnalyzer:
         volume = df['volume'].iloc[-20:]
         spread = (df['high'] - df['low']).iloc[-20:]
         
-        # Low volume + high spread = low liquidity
         vol_mean = volume.mean()
         spread_mean = spread.mean()
         
         if vol_mean == 0:
             return 0.5
             
-        # Normalize metrics
-        vol_score = min(vol_mean / 1000, 1.0)  # Assuming 1000 is baseline
-        spread_score = max(0, 1 - (spread_mean / 2.0))  # Assuming 2.0 is wide spread for gold
+        vol_score = min(vol_mean / 1000, 1.0)
+        spread_score = max(0, 1 - (spread_mean / 2.0))
         
         return (vol_score + spread_score) / 2
 
-# ==================== PATTERN CLUSTERING ====================
 
 class PatternClustering:
-    """Similarity-based pattern matching using clustering"""
     def __init__(self, n_clusters=50):
         self.kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=42)
         self.scaler = StandardScaler()
@@ -934,7 +855,6 @@ class PatternClustering:
         self.feature_importance = np.ones(20) / 20
         
     def extract_features(self, df: pd.DataFrame, idx: int = -1) -> np.ndarray:
-        """Extract comprehensive feature vector"""
         row = df.iloc[idx]
         
         features = [
@@ -953,20 +873,18 @@ class PatternClustering:
             np.tanh(row['momentum'] / 10) if 'momentum' in df.columns else 0,
             pd.to_datetime(row['datetime']).hour / 24 if 'datetime' in df.columns else 0,
             pd.to_datetime(row['datetime']).weekday() / 7 if 'datetime' in df.columns else 0,
-            0, 0, 0, 0, 0  # Reserved for latent features
+            0, 0, 0, 0, 0
         ]
         
         return np.array(features)
         
     def update_importance(self, features: np.ndarray, result: int):
-        """Reinforce features that led to wins"""
         if result == 1:
             self.feature_importance += np.abs(features) * 0.01
             self.feature_importance = np.clip(self.feature_importance, 0.01, 1.0)
             self.feature_importance /= self.feature_importance.sum()
         
     def get_similarity_score(self, features1: np.ndarray, features2: np.ndarray) -> float:
-        """Calculate weighted cosine similarity"""
         weighted_f1 = features1 * self.feature_importance
         weighted_f2 = features2 * self.feature_importance
         
@@ -976,7 +894,6 @@ class PatternClustering:
         return cosine_similarity([weighted_f1], [weighted_f2])[0][0]
         
     def find_similar_patterns(self, features: np.ndarray, top_k=5) -> List[Dict]:
-        """Find most similar historical patterns"""
         if not self.pattern_memory:
             return []
             
@@ -990,9 +907,7 @@ class PatternClustering:
         return [{'pattern_id': s[0], 'similarity': s[1], 'data': s[2]} for s in similarities[:top_k]]
         
     def cluster_and_store(self, features: np.ndarray, result: int, trade_id: str):
-        """Store pattern with clustering"""
         if not self.is_fitted and len(self.pattern_memory) > 100:
-            # Initial fitting
             all_features = [p['features'] for p in self.pattern_memory.values() if 'features' in p]
             if len(all_features) >= 50:
                 self.kmeans.partial_fit(all_features)
@@ -1015,7 +930,6 @@ class PatternClustering:
         self.update_importance(features, result)
         
     def get_cluster_success_rate(self, features: np.ndarray) -> float:
-        """Get success rate for similar patterns"""
         similar = self.find_similar_patterns(features, top_k=3)
         if not similar:
             return 0.5
@@ -1027,17 +941,14 @@ class PatternClustering:
         if total == 0:
             return 0.5
             
-        # Weight by similarity
         weighted_success = sum(s['similarity'] * (s['data']['wins'] / (s['data']['wins'] + s['data']['losses'] + 1e-10)) 
                               for s in similar)
         weight_sum = sum(s['similarity'] for s in similar)
         
         return weighted_success / (weight_sum + 1e-10)
 
-# ==================== TRADE SEQUENCE INTELLIGENCE ====================
 
 class TradeSequenceIntelligence:
-    """Analyze streaks and trade sequences"""
     def __init__(self, memory_maxlen=1000):
         self.trade_history = deque(maxlen=memory_maxlen)
         self.current_streak = 0
@@ -1045,7 +956,6 @@ class TradeSequenceIntelligence:
         self.serial_correlation = 0
         
     def add_trade(self, result: int, direction: str, features: Dict):
-        """Add trade to sequence analysis"""
         self.trade_history.append({
             'result': result,
             'direction': direction,
@@ -1053,7 +963,6 @@ class TradeSequenceIntelligence:
             'timestamp': datetime.now()
         })
         
-        # Update streak
         if result == 1:
             if self.streak_type == 'win':
                 self.current_streak += 1
@@ -1070,7 +979,6 @@ class TradeSequenceIntelligence:
         self._calculate_serial_correlation()
         
     def _calculate_serial_correlation(self):
-        """Calculate serial correlation of wins/losses"""
         if len(self.trade_history) < 10:
             return
             
@@ -1082,7 +990,6 @@ class TradeSequenceIntelligence:
             self.serial_correlation = np.corrcoef(x, y)[0, 1]
             
     def get_streak_adjustment(self) -> float:
-        """Get risk adjustment factor based on streak"""
         if self.current_streak >= 3 and self.streak_type == 'loss':
             return 0.5
         elif self.current_streak >= 3 and self.streak_type == 'win':
@@ -1090,7 +997,6 @@ class TradeSequenceIntelligence:
         return 1.0
         
     def get_regime_bias(self) -> str:
-        """Detect if we're in a 'hot' or 'cold' regime"""
         if len(self.trade_history) < 20:
             return 'neutral'
             
@@ -1104,7 +1010,6 @@ class TradeSequenceIntelligence:
             return 'cold'
         return 'neutral'
 
-# ==================== DEEP FAILURE ANALYSIS ====================
 
 @dataclass
 class FailureRecord:
@@ -1113,8 +1018,8 @@ class FailureRecord:
     setups: List[Dict] = field(default_factory=list)
     toxicity_score: float = 0.0
 
+
 class DeepFailureAnalyzer:
-    """Track and analyze recurring failure patterns"""
     def __init__(self):
         self.failure_categories = {
             'early_exit': FailureRecord('early_exit'),
@@ -1131,7 +1036,6 @@ class DeepFailureAnalyzer:
         self.toxic_setups = []
         
     def analyze_failure(self, trade: Dict, market_context: Dict):
-        """Categorize why a trade failed"""
         if trade['result'] == 1:
             return
             
@@ -1162,7 +1066,6 @@ class DeepFailureAnalyzer:
         self._update_toxicity_scores()
         
     def _update_toxicity_scores(self):
-        """Calculate toxicity scores for failure types"""
         max_count = max(f.count for f in self.failure_categories.values()) + 1
         
         for key, record in self.failure_categories.items():
@@ -1171,7 +1074,6 @@ class DeepFailureAnalyzer:
                 record.toxicity_score = (record.count / max_count) * (1 + abs(avg_loss))
                 
     def is_toxic_setup(self, features: Dict, context: Dict) -> Tuple[bool, float]:
-        """Check if current setup matches toxic patterns"""
         toxicity = 0.0
         reasons = []
         
@@ -1186,7 +1088,6 @@ class DeepFailureAnalyzer:
         return toxicity > 1.0, min(toxicity / 5.0, 1.0)
         
     def _setup_similarity(self, f1: Dict, f2: Dict) -> float:
-        """Calculate similarity between two setups"""
         keys = ['rsi', 'adx', 'trend_strength', 'volatility']
         if not all(k in f1 and k in f2 for k in keys):
             return 0.0
@@ -1194,10 +1095,8 @@ class DeepFailureAnalyzer:
         diff = sum(abs(f1.get(k, 0) - f2.get(k, 0)) for k in keys)
         return max(0, 1 - diff / len(keys))
 
-# ==================== CONFIDENCE CALIBRATION ====================
 
 class ConfidenceCalibrator:
-    """Align predicted confidence with actual accuracy"""
     def __init__(self, n_bins=10):
         self.n_bins = n_bins
         self.bin_accuracies = {}
@@ -1205,7 +1104,6 @@ class ConfidenceCalibrator:
         self.calibration_history = deque(maxlen=1000)
         
     def update(self, predicted_confidence: float, actual_result: int):
-        """Record prediction vs actual"""
         bin_idx = int(predicted_confidence * self.n_bins)
         bin_idx = min(bin_idx, self.n_bins - 1)
         
@@ -1223,7 +1121,6 @@ class ConfidenceCalibrator:
         })
         
     def calibrate(self, raw_confidence: float) -> float:
-        """Adjust confidence based on historical calibration"""
         bin_idx = int(raw_confidence * self.n_bins)
         bin_idx = min(bin_idx, self.n_bins - 1)
         
@@ -1239,7 +1136,6 @@ class ConfidenceCalibrator:
         return np.clip(calibrated, 0.05, 0.99)
         
     def get_calibration_report(self) -> Dict:
-        """Get calibration statistics"""
         report = {}
         for bin_idx in sorted(self.bin_counts.keys()):
             count = self.bin_counts[bin_idx]
@@ -1254,10 +1150,8 @@ class ConfidenceCalibrator:
                 }
         return report
 
-# ==================== EXPLORATION VS EXPLOITATION ====================
 
 class ExplorationController:
-    """Epsilon-greedy exploration for strategy discovery"""
     def __init__(self, epsilon_start=0.3, epsilon_decay=0.995, epsilon_min=0.05):
         self.epsilon = epsilon_start
         self.epsilon_decay = epsilon_decay
@@ -1267,7 +1161,6 @@ class ExplorationController:
         self.new_setups_tested = []
         
     def should_explore(self) -> bool:
-        """Decide whether to try new strategy or exploit best known"""
         if random.random() < self.epsilon:
             self.exploration_count += 1
             return True
@@ -1275,7 +1168,6 @@ class ExplorationController:
         return False
         
     def decay(self):
-        """Reduce exploration rate"""
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         
     def get_exploration_stats(self) -> Dict:
@@ -1285,10 +1177,8 @@ class ExplorationController:
             'new_setups_tested': len(self.new_setups_tested)
         }
 
-# ==================== ADVANCED RISK INTELLIGENCE ====================
 
 class AdvancedRiskIntelligence:
-    """Sophisticated risk management with equity curve feedback"""
     def __init__(self):
         self.equity_curve = deque(maxlen=500)
         self.drawdown_history = deque(maxlen=100)
@@ -1297,49 +1187,41 @@ class AdvancedRiskIntelligence:
         self.volatility_adjusted_sizing = 1.0
         self.news_risk_multiplier = 1.0
         self.kelly_fraction = 0.25
-        self.base_risk = 0.01  # 1% base risk
+        self.base_risk = 0.01
         self.current_risk = self.base_risk
         
     def update_equity(self, trade_result: float):
-        """Update equity curve with new P&L"""
         prev_equity = self.equity_curve[-1] if self.equity_curve else 10000
         new_equity = prev_equity * (1 + trade_result)
         self.equity_curve.append(new_equity)
         
-        # Calculate drawdown
         peak = max(self.equity_curve)
         self.current_drawdown = (peak - new_equity) / peak
         self.max_drawdown = max(self.max_drawdown, self.current_drawdown)
         self.drawdown_history.append(self.current_drawdown)
         
-        # Adjust risk based on drawdown
-        if self.current_drawdown > 0.1:  # 10% drawdown
+        if self.current_drawdown > 0.1:
             self.current_risk = self.base_risk * 0.5
-        elif self.current_drawdown > 0.05:  # 5% drawdown
+        elif self.current_drawdown > 0.05:
             self.current_risk = self.base_risk * 0.75
         else:
             self.current_risk = self.base_risk
             
     def calculate_position_size(self, volatility: float, atr: float, 
                               confidence: float, streak_adjustment: float) -> float:
-        """Calculate position size using Kelly Criterion + adjustments"""
-        # Volatility adjustment (lower size in high vol)
         vol_factor = 1 / (1 + volatility * 10)
         
-        # Kelly fraction based on win rate and payoff
         win_rate = confidence
-        payoff = 2.0  # Assuming 2:1 reward/risk
+        payoff = 2.0
         kelly = (win_rate * payoff - (1 - win_rate)) / payoff if payoff > 0 else 0
-        kelly = max(0, min(kelly, 0.5))  # Cap at 50%
+        kelly = max(0, min(kelly, 0.5))
         
-        # Combine factors
         size = (self.current_risk * self.kelly_fraction * 
                 kelly * vol_factor * streak_adjustment * self.news_risk_multiplier)
                 
-        return np.clip(size, 0.001, 0.1)  # Between 0.1% and 10%
+        return np.clip(size, 0.001, 0.1)
         
     def adjust_for_news(self, sentiment_score: float, impact_score: float):
-        """Reduce risk during high-impact news"""
         if impact_score > 0.7:
             self.news_risk_multiplier = 0.5
         elif abs(sentiment_score) > 0.5:
@@ -1356,10 +1238,8 @@ class AdvancedRiskIntelligence:
             'news_multiplier': self.news_risk_multiplier
         }
 
-# ==================== MULTI-TIMEFRAME INTELLIGENCE ====================
 
 class MultiTimeframeIntelligence:
-    """Higher timeframe bias with lower timeframe execution"""
     def __init__(self):
         self.htf_bias = 'neutral'
         self.htf_strength = 0
@@ -1367,8 +1247,6 @@ class MultiTimeframeIntelligence:
         
     def analyze_timeframes(self, df_15m: pd.DataFrame, df_1h: pd.DataFrame, 
                           df_4h: pd.DataFrame, df_daily: Optional[pd.DataFrame] = None) -> Dict:
-        """Analyze confluence across timeframes"""
-        # HTF Trend (4H)
         if len(df_4h) >= 50:
             ema_50_4h = calculate_ema(df_4h['close'], 50).iloc[-1]
             ema_200_4h = calculate_ema(df_4h['close'], 200).iloc[-1] if len(df_4h) >= 200 else ema_50_4h
@@ -1378,18 +1256,15 @@ class MultiTimeframeIntelligence:
             trend_4h = 0
             adx_4h = 0
             
-        # MTF Trend (1H)
         if len(df_1h) >= 50:
             ema_50_1h = calculate_ema(df_1h['close'], 50).iloc[-1]
             trend_1h = 1 if ema_50_1h > calculate_ema(df_1h['close'], 200).iloc[-1] else -1
         else:
             trend_1h = 0
             
-        # LTF (15m) for entry timing
         ema_20_15m = calculate_ema(df_15m['close'], 20).iloc[-1]
         price_15m = df_15m['close'].iloc[-1]
         
-        # Calculate alignment
         trends = [trend_4h, trend_1h]
         if all(t == 1 for t in trends):
             self.htf_bias = 'bullish'
@@ -1401,7 +1276,6 @@ class MultiTimeframeIntelligence:
             self.htf_bias = 'mixed'
             self.htf_strength = 0.3
             
-        # Check pullback entries
         pullback_buy = (self.htf_bias == 'bullish' and 
                        price_15m < ema_20_15m and 
                        price_15m > calculate_ema(df_15m['close'], 50).iloc[-1])
@@ -1425,7 +1299,6 @@ class MultiTimeframeIntelligence:
         }
         
     def filter_trade(self, direction: str) -> Tuple[bool, str]:
-        """Filter trade based on HTF bias"""
         if self.htf_bias == 'mixed':
             return True, "mixed_ok"
             
@@ -1437,10 +1310,8 @@ class MultiTimeframeIntelligence:
             
         return True, "aligned"
 
-# ==================== STRATEGY COMPETITION SYSTEM ====================
 
 class Strategy:
-    """Individual trading strategy"""
     def __init__(self, name: str, strategy_type: str):
         self.name = name
         self.type = strategy_type
@@ -1451,7 +1322,6 @@ class Strategy:
         self.profit_factor = 1.0
         
     def update_performance(self, pnl: float):
-        """Update strategy performance"""
         self.performance.append(pnl)
         if len(self.performance) >= 10:
             wins = sum(1 for p in self.performance if p > 0)
@@ -1461,7 +1331,6 @@ class Strategy:
             self.profit_factor = profits / (losses + 1e-10)
             
     def calculate_score(self) -> float:
-        """Calculate composite performance score"""
         if len(self.performance) < 5:
             return 0.5
             
@@ -1475,19 +1344,17 @@ class Strategy:
                 np.clip(sharpe, -1, 1) * 0.2)
         return np.clip(score, 0.1, 2.0)
 
+
 class StrategyCompetition:
-    """Competition between multiple strategies"""
     def __init__(self):
         self.strategies = {}
         self.selected_strategy = None
         self.competition_results = deque(maxlen=100)
         
     def add_strategy(self, name: str, strategy_type: str):
-        """Add new strategy to competition"""
         self.strategies[name] = Strategy(name, strategy_type)
         
     def select_strategy(self, regime: str, exploration: bool = False) -> Optional[Strategy]:
-        """Select best strategy for current regime"""
         if exploration:
             return random.choice(list(self.strategies.values()))
             
@@ -1508,12 +1375,10 @@ class StrategyCompetition:
         return self.selected_strategy
         
     def update_strategy(self, name: str, pnl: float):
-        """Update specific strategy performance"""
         if name in self.strategies:
             self.strategies[name].update_performance(pnl)
             
     def get_allocation(self) -> Dict[str, float]:
-        """Get capital allocation per strategy"""
         total_score = sum(s.calculate_score() for s in self.strategies.values())
         if total_score == 0:
             return {name: 1/len(self.strategies) for name in self.strategies}
@@ -1521,10 +1386,8 @@ class StrategyCompetition:
         return {name: s.calculate_score()/total_score 
                 for name, s in self.strategies.items()}
 
-# ==================== META LEARNER V2 ====================
 
 class MetaLearnerV2:
-    """Advanced meta-learning with adaptive learning rate and strategy switching"""
     def __init__(self):
         self.strategy_weights = {
             'momentum': 0.2, 
@@ -1545,7 +1408,6 @@ class MetaLearnerV2:
         self.strategy_switch_cooldown = 0
         
     def adapt_learning_rate(self, strategy: str, performance: float):
-        """Adapt learning rate based on gradient variance"""
         history = list(self.performance_history[strategy])[-10:]
         if len(history) < 5:
             return
@@ -1557,7 +1419,6 @@ class MetaLearnerV2:
             self.learning_rates[strategy] = min(0.5, self.learning_rates[strategy] * 1.1)
             
     def switch_strategy(self, regime: str, force: bool = False):
-        """Switch to best strategy for current regime"""
         if self.strategy_switch_cooldown > 0 and not force:
             self.strategy_switch_cooldown -= 1
             return
@@ -1570,7 +1431,6 @@ class MetaLearnerV2:
             self.strategy_switch_cooldown = 5
             
     def update_weights(self, strategy: str, profit: float, regime: str):
-        """Update strategy weights with adaptive learning rate"""
         if strategy not in self.performance_history:
             return
             
@@ -1594,7 +1454,6 @@ class MetaLearnerV2:
         self.switch_strategy(regime)
         
     def get_combined_signal(self, signals: Dict[str, float], regime: str) -> float:
-        """Combine signals with current strategy emphasis"""
         self.switch_strategy(regime)
         
         combined = 0
@@ -1613,7 +1472,6 @@ class MetaLearnerV2:
                 
         return combined / (total_weight + 1e-10)
 
-# ==================== NEWS SENTIMENT (NO API KEY REQUIRED) ====================
 
 class NewsSentimentAnalyzer:
     def __init__(self):
@@ -1623,7 +1481,6 @@ class NewsSentimentAnalyzer:
         self.impact_score = 0.5
 
     def fetch_gold_news(self):
-        """Fetch gold-related news from FREE RSS feeds (no API key required)"""
         try:
             feeds = [
                 'https://www.investing.com/rss/news_commodities.rss',
@@ -1671,7 +1528,6 @@ class NewsSentimentAnalyzer:
             return []
 
     def _fallback_news_fetch(self):
-        """Fallback method using web scraping for free gold news"""
         articles = []
         try:
             url = "https://www.gold.org/news-and-events/news"
@@ -1694,7 +1550,6 @@ class NewsSentimentAnalyzer:
         return articles
 
     def _estimate_impact(self, title: str) -> float:
-        """Estimate news impact based on keywords"""
         title_lower = title.lower()
         
         high_impact = [
@@ -1720,7 +1575,6 @@ class NewsSentimentAnalyzer:
         return 0.3
 
     def analyze_sentiment(self, text):
-        """Analyze sentiment using TextBlob"""
         try:
             blob = TextBlob(text)
             polarity = blob.sentiment.polarity
@@ -1731,7 +1585,6 @@ class NewsSentimentAnalyzer:
             return 0, 0
 
     def get_combined_sentiment(self):
-        """Get aggregated sentiment from recent news"""
         if self.last_fetch and (datetime.now() - self.last_fetch).seconds < 300:
             if self.sentiment_history:
                 last = self.sentiment_history[-1]
@@ -1773,7 +1626,6 @@ class NewsSentimentAnalyzer:
         logger.info(f"News sentiment: {avg_sentiment:.2f}, confidence: {confidence:.2f}, impact: {max_impact:.2f}")
         return result
 
-# ==================== DEEP LEARNING MODEL ====================
 
 class DeepLearningModel:
     def __init__(self, input_dim=20, sequence_length=10, hidden_dim=64, attention_heads=4):
@@ -1811,7 +1663,7 @@ class DeepLearningModel:
             'bi': np.zeros((1, hidden)),
             'bo': np.zeros((1, hidden)),
             'bc': np.zeros((1, hidden)),
-            'W_attn': np.random.randn(hidden, self.attention_heads) * 0.01,
+                        'W_attn': np.random.randn(hidden, self.attention_heads) * 0.01,
             'W_out': np.random.randn(hidden, 1) * 0.01,
             'b_out': np.zeros((1, 1))
         }
@@ -1894,7 +1746,6 @@ class DeepLearningModel:
         return float(output[0, 0])
 
     def adapt_learning_rate(self, loss: float):
-        """Meta-learning: adapt LR based on loss trajectory"""
         self.gradient_history.append(loss)
         if len(self.gradient_history) >= 10:
             recent = list(self.gradient_history)[-10:]
@@ -1942,7 +1793,6 @@ class DeepLearningModel:
             except Exception as e:
                 logger.error(f"Model load error: {e}")
 
-# ==================== ADAPTIVE ENSEMBLE ====================
 
 class AdaptiveEnsemble:
     def __init__(self):
@@ -1998,7 +1848,6 @@ class AdaptiveEnsemble:
         for name in self.model_weights:
             self.model_weights[name] /= total
 
-# ==================== CONTINUOUS TRAINER ====================
 
 class ContinuousTrainer:
     def __init__(self, model, memory, interval_minutes=60):
@@ -2053,10 +1902,8 @@ class ContinuousTrainer:
         for key in self.model.weights:
             self.model.weights[key] += learning_rate * error * np.random.randn(*self.model.weights[key].shape) * 0.001
 
-# ==================== SMC/ICT FEATURES ====================
 
 def detect_structure(df, swing=3):
-    """Detect market structure breaks (BOS/CHoCH)"""
     if len(df) < swing + 2:
         return 0, None
 
@@ -2077,7 +1924,6 @@ def detect_structure(df, swing=3):
     return 0, None
 
 def detect_liquidity_sweep(df, lookback=5):
-    """Detect liquidity sweeps above/below recent highs/lows"""
     if len(df) < lookback + 2:
         return 0, None, None
 
@@ -2098,7 +1944,6 @@ def detect_liquidity_sweep(df, lookback=5):
     return 0, None, None
 
 def detect_order_blocks(df):
-    """Detect bullish/bearish order blocks"""
     if len(df) < 3:
         return 0, None, None
 
@@ -2117,7 +1962,6 @@ def detect_order_blocks(df):
     return 0, None, None
 
 def detect_fvg(df):
-    """Detect Fair Value Gaps (imbalances)"""
     if len(df) < 3:
         return 0, None, None
 
@@ -2133,7 +1977,6 @@ def detect_fvg(df):
     return 0, None, None
 
 def detect_supply_demand(df, lookback=10):
-    """Detect supply and demand zones based on strong displacement"""
     if len(df) < lookback + 2:
         return 0, None, None
 
@@ -2157,7 +2000,6 @@ def detect_supply_demand(df, lookback=10):
 
     return 0, None, None
 
-# ==================== DATABASE & DATA FETCHING ====================
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -2242,7 +2084,6 @@ def fetch_data(interval="15min", outputsize=500):
         raise Exception(f"Data fetch failed: {str(e)}")
 
 def add_indicators(df, data_quality_filter=None):
-    # Apply data quality filter if provided
     if data_quality_filter is not None:
         df = data_quality_filter.filter_dataframe(df)
         
@@ -2261,7 +2102,6 @@ def add_indicators(df, data_quality_filter=None):
     df["momentum"] = df["close"].diff(10)
     df["volatility"] = df["close"].rolling(20).std()
     
-    # Additional indicators
     df["mfi"] = calculate_money_flow_index(df)
     df["stoch_k"], df["stoch_d"] = calculate_stochastic(df)
     df["williams_r"] = calculate_williams_r(df)
@@ -2270,10 +2110,8 @@ def add_indicators(df, data_quality_filter=None):
     df.dropna(inplace=True)
     return df
 
-# ==================== TRADE MEMORY ====================
 
 class TradeMemory:
-    """Store and manage trade history"""
     def __init__(self):
         self.short_term = deque(maxlen=100)
         self.long_term = deque(maxlen=1000)
@@ -2297,32 +2135,26 @@ class TradeMemory:
             except:
                 pass
 
-# ==================== TOP 3 XAUUSD STRATEGIES ====================
 
 class LondonBreakoutStrategy:
-    """Strategy 1: London Session Breakout"""
     def __init__(self):
         self.name = "London_Breakout"
-        self.session_start = 8  # 8:00 UTC
+        self.session_start = 8
         self.session_end = 11
         
     def generate_signal(self, df: pd.DataFrame) -> Tuple[str, float, str]:
-        """Generate breakout signal during London session"""
         if len(df) < 20:
             return "HOLD", 0, "Insufficient data"
             
         current_hour = pd.to_datetime(df['datetime'].iloc[-1]).hour
         
-        # Only trade first 3 hours of London
         if not (self.session_start <= current_hour < self.session_end):
             return "HOLD", 0, "Outside London session"
             
-        # Calculate Asian session range (previous 5 hours)
         asian_high = df["high"].iloc[-20:-5].max()
         asian_low = df["low"].iloc[-20:-5].min()
         current_close = df["close"].iloc[-1]
         
-        # Breakout detection
         if current_close > asian_high:
             confidence = min(0.8, (current_close - asian_high) / df["atr"].iloc[-1])
             return "BUY", confidence, "London_Breakout_Bullish"
@@ -2332,13 +2164,12 @@ class LondonBreakoutStrategy:
             
         return "HOLD", 0, "No breakout"
 
+
 class SMCStrategy:
-    """Strategy 2: Smart Money Concepts (ICT Style)"""
     def __init__(self):
         self.name = "SMC_ICT"
         
     def generate_signal(self, df: pd.DataFrame) -> Tuple[str, float, str]:
-        """Generate signal based on SMC concepts"""
         structure_bias, _ = detect_structure(df)
         sweep, _, _ = detect_liquidity_sweep(df)
         ob_dir, _, _ = detect_order_blocks(df)
@@ -2382,28 +2213,24 @@ class SMCStrategy:
             
         return "HOLD", 0, "No_SMC_Setup"
 
+
 class TrendConfluenceStrategy:
-    """Strategy 3: Multi-Timeframe Trend Confluence with EMAs"""
     def __init__(self):
         self.name = "Trend_Confluence"
         
     def generate_signal(self, df: pd.DataFrame, df_1h: Optional[pd.DataFrame] = None) -> Tuple[str, float, str]:
-        """Trend following with multiple confirmation"""
         if len(df) < 200:
             return "HOLD", 0, "Insufficient data"
             
-        # 15m indicators
         ema_20 = calculate_ema(df["close"], 20).iloc[-1]
         ema_50 = calculate_ema(df["close"], 50).iloc[-1]
         ema_200 = calculate_ema(df["close"], 200).iloc[-1]
         price = df["close"].iloc[-1]
         adx = df["adx"].iloc[-1] if "adx" in df.columns else 0
         
-        # Trend alignment
         bullish_alignment = price > ema_20 > ema_50 > ema_200
         bearish_alignment = price < ema_20 < ema_50 < ema_200
         
-        # 1H confirmation if available
         htf_confirmed = False
         if df_1h is not None and len(df_1h) >= 50:
             ema_50_1h = calculate_ema(df_1h["close"], 50).iloc[-1]
@@ -2413,7 +2240,6 @@ class TrendConfluenceStrategy:
             elif bearish_alignment and ema_50_1h < ema_200_1h:
                 htf_confirmed = True
                 
-        # ADX filter for trend strength
         strong_trend = adx > 25
         
         if bullish_alignment and (htf_confirmed or strong_trend):
@@ -2425,7 +2251,6 @@ class TrendConfluenceStrategy:
             
         return "HOLD", 0, "No_Trend_Alignment"
 
-# ==================== FEATURE CALCULATION ====================
 
 def calculate_adaptive_features(df, regime_detector, latent_discovery=None):
     regime = regime_detector.detect(df)
@@ -2460,7 +2285,6 @@ def calculate_adaptive_features(df, regime_detector, latent_discovery=None):
         range_low = df["low"].rolling(20).min().iloc[-1] if len(df) >= 20 else features['low']
         features['range_position'] = (features['close'] - range_low) / (range_high - range_low + 1e-6)
 
-    # Add latent features if available
     if latent_discovery is not None:
         feature_vector = np.array([
             features.get('rsi', 0), features.get('macd', 0), 
@@ -2474,7 +2298,6 @@ def calculate_adaptive_features(df, regime_detector, latent_discovery=None):
         
     return features, regime
 
-# ==================== SIGNAL GENERATION ====================
 
 def generate_signal(df15m, df1h, df4h, ensemble, memory, regime_detector, 
                    meta_learner, sentiment_analyzer, pattern_clustering,
@@ -2482,35 +2305,27 @@ def generate_signal(df15m, df1h, df4h, ensemble, memory, regime_detector,
                    exploration_ctrl, risk_intel, latent_discovery,
                    strategy_competition, data_quality_filter, macro_data, adv_liquidity):
     
-    # Data quality check
     clean_df15m = data_quality_filter.filter_dataframe(df15m)
     if len(clean_df15m) < 50:
         return "HOLD", None, None, None, None, 0, "unknown", {}, 0, "Data quality issues", 0, {}
         
-    # Get multi-timeframe features
     features_15m, regime_15m = calculate_adaptive_features(clean_df15m, regime_detector, latent_discovery)
     features_1h, regime_1h = calculate_adaptive_features(df1h, regime_detector)
     features_4h, regime_4h = calculate_adaptive_features(df4h, regime_detector)
 
-    # MTF Analysis
     mtf_analysis = mtf_intel.analyze_timeframes(clean_df15m, df1h, df4h)
     regime = regime_4h
     adx_value = features_4h.get('adx', 0)
 
-    # Macro Economic Analysis
     macro_signal, macro_score = macro_data.get_signal()
     
-    # Advanced Liquidity Analysis
-    liquidity_zones = adv_liquidity.get_optimal_entry_zones(clean_df15m, "BUY")  # Default to buy for analysis
+    liquidity_zones = adv_liquidity.get_optimal_entry_zones(clean_df15m, "BUY")
     liquidity_score = adv_liquidity.calculate_liquidity_score(clean_df15m)
 
-    # Exploration vs Exploitation
     explore = exploration_ctrl.should_explore()
     
-    # Strategy Competition
     selected_strategy = strategy_competition.select_strategy(regime, exploration=explore)
     
-    # Run top 3 strategies
     london_strat = LondonBreakoutStrategy()
     smc_strat = SMCStrategy()
     trend_strat = TrendConfluenceStrategy()
@@ -2525,7 +2340,6 @@ def generate_signal(df15m, df1h, df4h, ensemble, memory, regime_detector,
         'Trend_Confluence': (tr_signal, tr_conf)
     }
     
-    # Meta-learner combination
     signals = {
         'momentum': tr_conf if tr_signal != "HOLD" else 0.5,
         'mean_reversion': 1 - abs(features_15m['rsi'] - 50) / 50,
@@ -2536,7 +2350,6 @@ def generate_signal(df15m, df1h, df4h, ensemble, memory, regime_detector,
     
     combined_signal = meta_learner.get_combined_signal(signals, regime)
     
-    # Select best strategy signal
     best_signal = "HOLD"
     best_conf = 0
     best_reason = ""
@@ -2547,44 +2360,36 @@ def generate_signal(df15m, df1h, df4h, ensemble, memory, regime_detector,
             best_conf = conf
             best_reason = f"{strat_name}:{ld_reason if strat_name=='London_Breakout' else smc_reason if strat_name=='SMC' else tr_reason}"
             
-    # If no strategy has strong signal, use meta-learner
     if best_signal == "HOLD" and abs(combined_signal - 0.5) > 0.1:
         best_signal = "BUY" if combined_signal > 0.5 else "SELL"
         best_conf = abs(combined_signal - 0.5) * 2
         best_reason = "MetaLearner_Combined"
         
-    # Check for toxic setups
     is_toxic, toxicity = failure_analyzer.is_toxic_setup(features_15m, {'regime': regime})
     if is_toxic:
         return "HOLD", None, None, None, None, 0, regime, features_15m, 0, f"Toxic setup detected ({toxicity:.2f})", 0, {}
 
-    # ADX Filter with regime exception
     if adx_value < 18 and regime not in ['manipulation', 'expansion']:
         return "HOLD", None, None, None, None, 0, regime, features_15m, 0, "ADX too low", 0, {}
 
-    # MTF Filter
     mtf_ok, mtf_msg = mtf_intel.filter_trade(best_signal)
     if not mtf_ok:
         return "HOLD", None, None, None, None, 0, regime, features_15m, 0, f"MTF filter: {mtf_msg}", 0, {}
 
-    # Macro Filter - Strong macro signal overrides
     if macro_signal in ['strong_bullish', 'strong_bearish']:
         if macro_signal == 'strong_bullish' and best_signal == "SELL":
             return "HOLD", None, None, None, None, 0, regime, features_15m, 0, "Macro against signal", 0, {}
         if macro_signal == 'strong_bearish' and best_signal == "BUY":
             return "HOLD", None, None, None, None, 0, regime, features_15m, 0, "Macro against signal", 0, {}
 
-    # News sentiment
     sentiment_score, sentiment_conf, impact = sentiment_analyzer.get_combined_sentiment()
     risk_intel.adjust_for_news(sentiment_score, impact)
     
-    # Apply sentiment filter
     if abs(sentiment_score) > 0.3:
         sentiment_adjustment = sentiment_score * 0.2
         if (best_signal == "BUY" and sentiment_adjustment < -0.1) or (best_signal == "SELL" and sentiment_adjustment > 0.1):
             return "HOLD", None, None, None, None, 0, regime, features_15m, sentiment_score, "Sentiment against signal", 0, {}
 
-    # Pattern clustering confidence
     feature_vector = np.array([
         features_15m['rsi'] / 100,
         np.tanh(features_15m['macd'] / 10),
@@ -2597,20 +2402,17 @@ def generate_signal(df15m, df1h, df4h, ensemble, memory, regime_detector,
         features_15m.get('vwap_dist', 0),
         features_1h['rsi'] / 100,
         features_4h['rsi'] / 100,
-        macro_score,  # Include macro score in features
-        liquidity_score['score']  # Include liquidity score
+        macro_score,
+        liquidity_score['score']
     ])
     
-    # Pad to 20
     if len(feature_vector) < 20:
         feature_vector = np.pad(feature_vector, (0, 20 - len(feature_vector)), mode='constant')
         
     cluster_conf = pattern_clustering.get_cluster_success_rate(feature_vector[:20])
     
-    # ML Prediction
     ml_prediction = ensemble.predict(feature_vector[:20].reshape(1, 20), regime)
     
-    # Final confidence calculation
     base_confidence = best_conf
     smc_boost = min(abs(smc_conf - 0.5) * 2, 0.2) if smc_signal == best_signal else 0
     macro_boost = abs(macro_score) * 0.1 if (macro_score > 0 and best_signal == "BUY") or (macro_score < 0 and best_signal == "SELL") else 0
@@ -2618,13 +2420,10 @@ def generate_signal(df15m, df1h, df4h, ensemble, memory, regime_detector,
     confidence = (base_confidence * 0.35 + cluster_conf * 0.25 + ml_prediction * 0.25 + smc_boost + macro_boost) * 100
     confidence = min(confidence, 99)
     
-    # Calibrate confidence
     confidence = calibrator.calibrate(confidence / 100) * 100
     
-    # Streak adjustment for risk
     streak_adj = sequence_intel.get_streak_adjustment()
     
-    # Check sequence regime
     seq_regime = sequence_intel.get_regime_bias()
     if seq_regime == 'cold' and confidence < 70:
         return "HOLD", None, None, None, None, 0, regime, features_15m, sentiment_score, "Cold streak protection", 0, {}
@@ -2632,20 +2431,16 @@ def generate_signal(df15m, df1h, df4h, ensemble, memory, regime_detector,
     if best_signal == "HOLD":
         return best_signal, None, None, None, None, 0, regime, features_15m, sentiment_score, "No setup", 0, {}
 
-    # Calculate levels with liquidity zones
     entry = clean_df15m["close"].iloc[-1]
     atr = clean_df15m["atr"].iloc[-1] if "atr" in clean_df15m.columns else entry * 0.001
 
-    # Get optimal entry zones from liquidity analysis
     optimal_zones = adv_liquidity.get_optimal_entry_zones(clean_df15m, best_signal)
     
-    # Adjust entry based on liquidity zones if beneficial
     if 'optimal_entry' in optimal_zones:
         potential_entry = optimal_zones['optimal_entry']
-        if abs(potential_entry - entry) < atr * 0.5:  # Only adjust if close to current price
+        if abs(potential_entry - entry) < atr * 0.5:
             entry = potential_entry
 
-    # Dynamic risk based on regime and streak
     if regime == 'trending':
         risk_multiplier = 2.0 * streak_adj
         tp_multiplier = 3.0
@@ -2656,7 +2451,6 @@ def generate_signal(df15m, df1h, df4h, ensemble, memory, regime_detector,
         risk_multiplier = 1.5 * streak_adj
         tp_multiplier = 2.0
 
-    # VWAP-based levels if available
     if "vwap" in clean_df15m.columns:
         vwap = clean_df15m["vwap"].iloc[-1]
         if best_signal == "BUY" and entry < vwap:
@@ -2682,12 +2476,10 @@ def generate_signal(df15m, df1h, df4h, ensemble, memory, regime_detector,
 
     tp2 = entry + (tp1 - entry) * 1.5 if best_signal == "BUY" else entry - (entry - tp1) * 1.5
 
-    # Position size calculation
     position_size = risk_intel.calculate_position_size(
         features_15m['volatility'], atr, confidence/100, streak_adj
     )
 
-    # Additional info for display
     additional_info = {
         'macro_signal': macro_signal,
         'macro_score': macro_score,
@@ -2701,7 +2493,6 @@ def generate_signal(df15m, df1h, df4h, ensemble, memory, regime_detector,
     return (best_signal, entry, tp1, tp2, sl, round(confidence, 2), regime, 
             features_15m, sentiment_score, best_reason, position_size, additional_info)
 
-# ==================== BACKTESTING ====================
 
 def backtest(df, ensemble, memory, regime_detector, meta_learner, sentiment_analyzer,
              pattern_clustering, sequence_intel, mtf_intel, failure_analyzer,
@@ -2745,7 +2536,6 @@ def backtest(df, ensemble, memory, regime_detector, meta_learner, sentiment_anal
                 else:
                     result = 0
 
-                # Update all learning systems
                 pattern_clustering.cluster_and_store(
                     np.array([features.get(k, 0) for k in ['rsi', 'macd', 'atr', 'bop', 'adx', 'vwap_dist', 'momentum', 'volatility']]), 
                     result, f"bt_{i}"
@@ -2774,7 +2564,6 @@ def backtest(df, ensemble, memory, regime_detector, meta_learner, sentiment_anal
 
     return round(win_rate, 2), round(sharpe, 2), total
 
-# ==================== TELEGRAM HANDLERS ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -2806,17 +2595,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("Processing...")
 
     try:
-        # Fetch all timeframes
         df15m_raw = fetch_data("15min", 500)
         df1h_raw = fetch_data("1h", 500)
         df4h_raw = fetch_data("4h", 500)
         
-        # Apply data quality filtering
         df15m = add_indicators(df15m_raw, data_quality_filter)
         df1h = add_indicators(df1h_raw, data_quality_filter)
         df4h = add_indicators(df4h_raw, data_quality_filter)
@@ -2880,7 +2668,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 data_quality_filter, macro_data, adv_liquidity
             )
 
-            # Get calibration report
             cal_report = calibrator.get_calibration_report()
             
             report_text = (
@@ -2938,7 +2725,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         elif query.data == "macro":
-            # Refresh macro data
             macro_info = macro_data.calculate_gold_drivers_score()
             
             await query.edit_message_text(
@@ -2970,7 +2756,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         elif query.data == "liquidity":
-            # Calculate current liquidity metrics
             liq_score = adv_liquidity.calculate_liquidity_score(df15m)
             vol_profile = adv_liquidity.calculate_volume_profile(df15m)
             stops = adv_liquidity.detect_stop_clusters(df15m)
@@ -3009,7 +2794,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 regime_detector.save(REGIME_FILE)
                 exploration_ctrl.decay()
                 
-                # Save new components
                 joblib.dump(calibrator, CALIBRATION_FILE)
                 joblib.dump(risk_intel, RISK_FILE)
                 macro_data.save(MACRO_FILE)
@@ -3029,6 +2813,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Button handler error: {e}")
         await query.edit_message_text(f"❌ Error: {str(e)}")
 
+
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if "subscribers" not in context.bot_data:
@@ -3044,6 +2829,7 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
+
 async def auto_retrain(context: ContextTypes.DEFAULT_TYPE):
     try:
         df15m = add_indicators(fetch_data("15min", 500), data_quality_filter)
@@ -3055,12 +2841,10 @@ async def auto_retrain(context: ContextTypes.DEFAULT_TYPE):
             regime_detector.save(REGIME_FILE)
             exploration_ctrl.decay()
             
-            # Save all components
             joblib.dump(calibrator, CALIBRATION_FILE)
             joblib.dump(risk_intel, RISK_FILE)
             macro_data.save(MACRO_FILE)
 
-            # Update macro data
             macro_data.calculate_gold_drivers_score()
 
             for chat_id in context.bot_data.get("subscribers", set()):
@@ -3079,7 +2863,6 @@ async def auto_retrain(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Auto-retrain error: {e}")
 
-# ==================== MAIN ====================
 
 def main():
     global ensemble, memory, regime_detector, meta_learner, trainer, sentiment_analyzer
@@ -3087,7 +2870,6 @@ def main():
     global exploration_ctrl, risk_intel, latent_discovery, strategy_competition
     global data_quality_filter, macro_data, adv_liquidity
 
-    # Initialize all components
     init_db()
 
     data_quality_filter = DataQualityFilter()
@@ -3102,13 +2884,11 @@ def main():
     macro_data = MacroEconomicData()
     adv_liquidity = AdvancedLiquidityAnalyzer()
     
-    # Strategy Competition
     strategy_competition = StrategyCompetition()
     strategy_competition.add_strategy("London_Breakout", "breakout")
     strategy_competition.add_strategy("SMC_ICT", "smc")
     strategy_competition.add_strategy("Trend_Confluence", "trend")
 
-    # Load or create legacy components
     memory = TradeMemory()
     if os.path.exists(MEMORY_FILE):
         memory.load(MEMORY_FILE)
@@ -3116,8 +2896,16 @@ def main():
     regime_detector = AdvancedMarketRegimeDetector()
     if os.path.exists(REGIME_FILE):
         try:
-            loaded_regime = joblib.load(REGIME_FILE)
-            regime_detector.__dict__.update(loaded_regime.__dict__)
+            loaded_data = joblib.load(REGIME_FILE)
+            if isinstance(loaded_data, dict):
+                regime_detector.regime = loaded_data.get('regime', 'unknown')
+                regime_detector.sub_regime = loaded_data.get('sub_regime', 'normal')
+                regime_detector.adx_value = loaded_data.get('adx_value', 0)
+                regime_detector.trend_strength = loaded_data.get('trend_strength', 0)
+                regime_detector.regime_history = deque(loaded_data.get('regime_history', []), maxlen=100)
+                regime_detector.adaptive_thresholds = loaded_data.get('adaptive_thresholds', regime_detector.adaptive_thresholds)
+            else:
+                regime_detector = loaded_data
         except:
             pass
 
@@ -3133,7 +2921,6 @@ def main():
 
     trainer = ContinuousTrainer(lstm_model, memory, interval_minutes=120)
     
-    # Load calibration if exists
     if os.path.exists(CALIBRATION_FILE):
         try:
             loaded_cal = joblib.load(CALIBRATION_FILE)
@@ -3141,7 +2928,6 @@ def main():
         except:
             pass
             
-    # Load risk state if exists
     if os.path.exists(RISK_FILE):
         try:
             loaded_risk = joblib.load(RISK_FILE)
@@ -3149,33 +2935,27 @@ def main():
         except:
             pass
 
-    # Load macro data if exists
     if os.path.exists(MACRO_FILE):
         try:
             macro_data.load(MACRO_FILE)
         except:
             pass
 
-    # Initial macro data fetch
     try:
         macro_data.calculate_gold_drivers_score()
     except Exception as e:
         logger.warning(f"Initial macro fetch failed: {e}")
 
-    # Build application
     application = ApplicationBuilder().token(TOKEN).build()
 
-    # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("subscribe", subscribe))
     application.add_handler(CallbackQueryHandler(button))
 
-    # Add job queue
     job_queue = application.job_queue
     if job_queue:
         job_queue.run_repeating(auto_retrain, interval=7200, first=10)
 
-    # Run
     logger.info("Advanced AI Trading System starting...")
     logger.info(f"Components loaded: Memory={len(memory.long_term)}, "
                 f"Patterns={len(pattern_clustering.pattern_memory)}, "
@@ -3183,5 +2963,7 @@ def main():
     
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
+
 if __name__ == "__main__":
     main()
+
