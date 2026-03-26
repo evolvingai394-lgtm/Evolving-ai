@@ -3,7 +3,6 @@ asyncio
 pandas
 numpy
 joblib
-sqlite3
 requests
 typing
 dataclasses
