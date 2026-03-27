@@ -684,7 +684,7 @@ def calculate_cmf(df, period=20):
 
 
 class LatentPatternDiscovery:
-    def __init__(self, input_dim=20, latent_dim=8):
+    def __init__(self, input_dim=8, latent_dim=8):
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         self.encoder_weights = np.random.randn(input_dim, latent_dim) * 0.01
