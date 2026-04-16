@@ -2985,7 +2985,7 @@ def main():
 
     job_queue = application.job_queue
     if job_queue:
-        job_queue.run_repeating(auto_retrain, interval=7200, first=10)
+        job_queue.run_repeating(auto_retrain, interval=7200, first=2)
 
     logger.info("Advanced AI Trading System starting...")
     logger.info(f"Components loaded: Memory={len(memory.memory)}, "
